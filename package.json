@@ -1,0 +1,31 @@
+{
+  "name": "gap-permit-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite --config vite.pages.config.ts",
+    "build": "tsc --noEmit && vite build --config vite.pages.config.ts",
+    "preview": "vite preview --config vite.pages.config.ts --host 127.0.0.1",
+    "test": "node --test tests/permits.test.mjs tests/sheets-service.test.mjs",
+    "deploy": "node publish-pages.mjs"
+  },
+  "dependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "lucide-react": "^1.31.0",
+    "html2canvas": "^1.4.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  }
+}
