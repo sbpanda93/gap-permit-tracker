@@ -42,3 +42,15 @@ Requesters submit permit changes for review. Issuers and administrators issue an
 ## Verification after deployment
 
 Confirm an unknown browser cannot read records. Activate the owner browser; check the empty live register and underlying tabs. Test writes in a dedicated test sheet before operational use. Test requester approval, duplicates, stale edits, overnight shifts and unit-aware handovers. Sample mode does not write to the sheet and is safe for reviewing the workflow.
+
+## Upgrade an existing GAP service for SAP permit scans
+
+The photo scan stores the detailed SAP form in a new `sapDetails` column on the existing Permits tab. Preserve the current sheet and service URL:
+
+1. Make a Google Sheets copy or other approved backup before changing the service.
+2. In the existing Apps Script project, replace `Code.gs` with the supplied updated file and save it.
+3. Run `migrateGapSchema` once from the function menu. It checks the existing Permits headers and adds only the `sapDetails` header; it stops if the column contains data or the existing headers differ.
+4. Open **Deploy > Manage deployments**, edit the current web app deployment, choose **New version**, and deploy. Keep the existing deployment URL in `public/config.js`.
+5. Refresh the website. The service must report schema version 2 before scanned permits can be saved. Manual permit entry remains available during the upgrade.
+
+The scan runs in the browser and does not upload or retain the original photo. OCR can miss values and checkbox marks. Issuers must verify every field, especially hazards, controls, PPE and signatures. The SAP issuer timestamp is stored as a printed-form reference; paper handover stays pending until the issuer confirms that the physical copy was handed to the receiver and enters its actual handover time.
