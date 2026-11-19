@@ -5,7 +5,7 @@
  * Roles always come from the Devices sheet, never from a browser request.
  */
 var GAP_COLUMNS_ = {
-  Permits: ['id','plant','unit','orderNo','orderType','jobDescription','receiver','contactNo','section','shiftDate','shift','isOnline','isolationTime','issueTime','extendedTime','returnedTime','status','issuer','createdBy','updatedBy','createdAt','updatedAt','version','deletedAt','operationId'],
+  Permits: ['id','plant','unit','orderNo','orderType','jobDescription','receiver','contactNo','section','shiftDate','shift','isOnline','isolationTime','issueTime','extendedTime','returnedTime','status','issuer','createdBy','updatedBy','createdAt','updatedAt','version','deletedAt','operationId','sapDetails'],
   Requests: ['id','targetPermitId','requestType','payload','requestedBy','requestedName','requestedAt','reviewedBy','reviewedAt','decision','version','operationId'],
   Members: ['email','name','role','updatedAt'],
   Devices: ['id','tokenHash','email','name','role','status','createdAt','updatedAt'],
@@ -25,6 +25,11 @@ function setupGap() {
   Object.keys(GAP_COLUMNS_).forEach(function(name){
     var sheet=book.getSheetByName(name)||book.insertSheet(name);
     if(sheet.getLastRow()===0){sheet.getRange(1,1,1,GAP_COLUMNS_[name].length).setValues([GAP_COLUMNS_[name]]);sheet.setFrozenRows(1);sheet.getRange(1,1,1,GAP_COLUMNS_[name].length).setBackground('#172c43').setFontColor('#ffffff').setFontWeight('bold');}
+    if(name==='Permits'&&sheet.getLastRow()>0){
+      var columns=GAP_COLUMNS_.Permits,old=columns.slice(0,columns.length-1),head=sheet.getRange(1,1,1,old.length).getValues()[0],sapColumn=sheet.getRange(1,columns.length,Math.max(1,sheet.getLastRow()),1).getValues();
+      var unused=sapColumn.every(function(row,index){return index===0?(!row[0]||row[0]===columns[columns.length-1]):(!row[0]||row[0]==='');});
+      if(JSON.stringify(head)===JSON.stringify(old)&&unused)sheet.getRange(1,columns.length).setValue(columns[columns.length-1]).setBackground('#172c43').setFontColor('#ffffff').setFontWeight('bold');
+    }
     var actual=sheet.getRange(1,1,1,GAP_COLUMNS_[name].length).getValues()[0];
     if(JSON.stringify(actual)!==JSON.stringify(GAP_COLUMNS_[name]))throw new Error(name+' has unexpected columns. Do not overwrite an existing register.');
   });
@@ -37,6 +42,23 @@ function setupGap() {
   console.log('GAP register created: '+book.getUrl());
   console.log('Use GAP_OWNER_SETUP_KEY from Script Properties once in the tracker to approve the owner browser. Never put it in GitHub or chat.');
   return {spreadsheetUrl:book.getUrl(),message:'Setup complete. Keep the spreadsheet private and add authorized staff in Members.'};
+}
+
+/** Adds the SAP detail bundle column while preserving all existing records. */
+function migrateGapSchema(){
+  var id=PropertiesService.getScriptProperties().getProperty('GAP_SPREADSHEET_ID');
+  if(!id)throw new Error('GAP_SPREADSHEET_ID is not configured.');
+  var sheet=SpreadsheetApp.openById(id).getSheetByName('Permits');
+  if(!sheet)throw new Error('Permits tab was not found.');
+  var columns=GAP_COLUMNS_.Permits,old=columns.slice(0,columns.length-1);
+  var actual=sheet.getRange(1,1,1,old.length).getValues()[0];
+  if(JSON.stringify(actual)!==JSON.stringify(old))throw new Error('The existing Permits header does not match the expected GAP register. No changes were made.');
+  var cell=sheet.getRange(1,columns.length);
+  if(cell.getValue()&&cell.getValue()!==columns[columns.length-1])throw new Error('The next column is already in use. No changes were made.');
+  if(!cell.getValue()&&sheet.getLastRow()>1&&sheet.getRange(2,columns.length,sheet.getLastRow()-1,1).getValues().some(function(row){return row[0]!==''&&row[0]!==null;}))throw new Error('The next column contains data. No changes were made.');
+  if(!cell.getValue())cell.setValue(columns[columns.length-1]).setBackground('#172c43').setFontColor('#ffffff').setFontWeight('bold');
+  SpreadsheetApp.flush();
+  return {schemaVersion:2,message:'SAP permit details column added. Existing permit rows were preserved.'};
 }
 
 function doGet(){return output_({ok:true,service:'GAP Permit Tracker',message:'Signed server requests are required. No permit records are available through this address.'});}
@@ -95,7 +117,7 @@ function dispatch_(book,actor,action,body,properties){
   if(['save','request','approve','reject','archive','setMember'].indexOf(action)>=0)operation_(body);
   var units=JSON.parse(properties.getProperty('GAP_UNITS')||'["GAP"]');
   if(!Array.isArray(units)||!units.length)fail_('CONFIGURATION','GAP_UNITS must be a non-empty JSON list of unit names.');
-  if(action==='bootstrap')return {role:actor.role,units:units,spreadsheetUrl:actor.role==='admin'?book.getUrl():'',joinCode:actor.role==='admin'?properties.getProperty('GAP_JOIN_CODE'):''};
+  if(action==='bootstrap')return {role:actor.role,units:units,schemaVersion:schemaVersion_(book),spreadsheetUrl:actor.role==='admin'?book.getUrl():'',joinCode:actor.role==='admin'?properties.getProperty('GAP_JOIN_CODE'):''};
   if(action==='list'){
     var from=validDate_(body.from),to=validDate_(body.to);
     if(from>to||(Date.parse(to)-Date.parse(from))/86400000>366)fail_('VALIDATION','Choose a date range of no more than one year.');
@@ -184,8 +206,9 @@ function savePermit_(book,actor,raw,operationId,units,forcedId){
 
 function validatePermit_(raw,units){
   if(!raw||typeof raw!=='object')fail_('VALIDATION','Permit details are missing.');
-  var p={id:text_(raw.id,100),version:Number(raw.version)||0,unit:text_(raw.unit,80),orderNo:text_(raw.orderNo,20),jobDescription:text_(raw.jobDescription,2000),receiver:text_(raw.receiver,120),contactNo:text_(raw.contactNo,30).replace(/[\s()-]/g,''),section:text_(raw.section,30),shiftDate:validDate_(raw.shiftDate),shift:text_(raw.shift,1),isOnline:raw.isOnline===true,isolationTime:text_(raw.isolationTime,5),issueTime:text_(raw.issueTime,5),extendedTime:text_(raw.extendedTime,5),returnedTime:text_(raw.returnedTime,5),status:text_(raw.status,15),issuer:text_(raw.issuer,120)};
-  if(!classify_(p.orderNo))fail_('VALIDATION','Use an 8-digit MA order beginning with 1 or a 9-digit M1–M4 order beginning with 1–4.');
+  var p={id:text_(raw.id,100),version:Number(raw.version)||0,unit:text_(raw.unit,80),orderNo:text_(raw.orderNo,20),jobDescription:text_(raw.jobDescription,2000),receiver:text_(raw.receiver,120),contactNo:text_(raw.contactNo,30).replace(/[\s()-]/g,''),section:text_(raw.section,30),shiftDate:validDate_(raw.shiftDate),shift:text_(raw.shift,1),isOnline:raw.isOnline===true,isolationTime:text_(raw.isolationTime,5),issueTime:text_(raw.issueTime,5),extendedTime:text_(raw.extendedTime,5),returnedTime:text_(raw.returnedTime,5),status:text_(raw.status,15),issuer:text_(raw.issuer,120),sapDetails:raw.sapDetails?validateSapDetails_(raw.sapDetails):null};
+  if(!classify_(p.orderNo))fail_('VALIDATION','Use a valid MA, M1–M4 or SAP permit number.');
+  if(p.sapDetails&&schemaVersion_(SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('GAP_SPREADSHEET_ID')))<2)fail_('SCHEMA_UPGRADE','Run migrateGapSchema and deploy the updated Google service before saving SAP permit details.');
   if(!p.jobDescription||!p.receiver)fail_('VALIDATION','Job description and receiver are required.');
   if(['Mechanical','Electrical','Operation'].indexOf(p.section)<0||units.indexOf(p.unit)<0)fail_('VALIDATION','Choose a configured unit and section.');
   if(['A','B','C','G'].indexOf(p.shift)<0)fail_('VALIDATION','Choose a valid shift.');
@@ -201,7 +224,7 @@ function validatePermit_(raw,units){
   if(p.issueTime&&p.returnedTime&&minute(p.issueTime)>minute(p.returnedTime))fail_('VALIDATION','Returned time must follow issue time.');
   return p;
 }
-function classify_(order){if(/^1\d{7}$/.test(order))return 'MA';if(/^[1-4]\d{8}$/.test(order))return 'M'+order[0];return '';}
+function classify_(order){if(/^1\d{7}$/.test(order))return 'MA';if(/^[1-4]\d{8}$/.test(order))return 'M'+order[0];if(/^9\d{8,11}$/.test(order)||/^\d{10,12}$/.test(order))return 'SAP';return '';}
 function sameEntry_(a,b){return a.unit===b.unit&&a.orderNo===b.orderNo&&a.shiftDate===b.shiftDate&&a.shift===b.shift;}
 function checkDuplicate_(rows,input,exclude){if(rows.some(function(p){return !p.deletedAt&&p.id!==exclude&&sameEntry_(p,input);}))fail_('DUPLICATE','This order already exists in the selected unit, date and shift. Update the existing permit.');}
 function requireRole_(actor,roles){if(roles.indexOf(actor.role)<0)fail_('FORBIDDEN','Your plant role does not allow this action.');}
@@ -212,10 +235,12 @@ function equal_(a,b){if(a.length!==b.length)return false;var mismatch=0;for(var 
 function fail_(code,message){var error=new Error(message);error.gapCode=code;throw error;}
 function output_(data){return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);}
 function clean_(row){var output={};Object.keys(row).forEach(function(key){if(key!=='_row')output[key]=row[key];});return output;}
-function permit_(row){var p=clean_(row);p.isOnline=p.isOnline===true||p.isOnline==='TRUE'||p.isOnline==='true';p.version=Number(p.version)||1;['id','orderNo','contactNo','shiftDate','isolationTime','issueTime','extendedTime','returnedTime','deletedAt','createdAt','updatedAt'].forEach(function(key){p[key]=String(p[key]||'');});return p;}
+function permit_(row){var p=clean_(row);p.isOnline=p.isOnline===true||p.isOnline==='TRUE'||p.isOnline==='true';p.version=Number(p.version)||1;['id','orderNo','contactNo','shiftDate','isolationTime','issueTime','extendedTime','returnedTime','deletedAt','createdAt','updatedAt'].forEach(function(key){p[key]=String(p[key]||'');});if(typeof p.sapDetails==='string'&&p.sapDetails){try{p.sapDetails=JSON.parse(p.sapDetails);}catch(error){p.sapDetails=null;}}else if(!p.sapDetails)p.sapDetails=null;return p;}
+function schemaVersion_(book){var sheet=book.getSheetByName('Permits');if(!sheet||sheet.getLastColumn()<GAP_COLUMNS_.Permits.length)return 1;return sheet.getRange(1,GAP_COLUMNS_.Permits.length).getValue()==='sapDetails'?2:1;}
+function validateSapDetails_(raw){if(!raw||typeof raw!=='object')fail_('VALIDATION','SAP permit details are malformed.');var keys=['permitType','sapPermitNo','sapOrderNo','applicationDate','applicantName','department','locationOfWork','personWorking','toolsEquipment','equipmentName','equipmentNo','certificateRefs','hazards','controls','ppe','safetyProcedureNo','validFromDate','validFromTime','validToDate','validToTime','sapStatus','handoverStatus','issuerName','issuerSigned','issuerDate','issuerTime','receiverName','receiverSigned','receiverDate','receiverTime','checkboxReviewConfirmed'];var limits={permitType:80,sapPermitNo:30,sapOrderNo:30,applicationDate:20,applicantName:120,department:120,locationOfWork:180,personWorking:500,toolsEquipment:1000,equipmentName:150,equipmentNo:80,certificateRefs:1000,hazards:3000,controls:3000,ppe:1000,safetyProcedureNo:250,validFromDate:20,validFromTime:10,validToDate:20,validToTime:10,sapStatus:80,handoverStatus:20,issuerName:120,issuerDate:20,issuerTime:10,receiverName:120,receiverDate:20,receiverTime:10};var out={};keys.forEach(function(key){var value=raw[key];if(key==='issuerSigned'||key==='receiverSigned'||key==='checkboxReviewConfirmed')out[key]=value===true;else if(key==='handoverStatus')out[key]=value==='handed_over'?'handed_over':'pending';else out[key]=text_(value,limits[key]||500);});return out;}
 function request_(row){var r=clean_(row);r.payload=typeof r.payload==='string'?JSON.parse(r.payload):r.payload;r.version=Number(r.version)||1;return r;}
 function readRows_(book,name){var sheet=book.getSheetByName(name);if(!sheet)fail_('CONFIGURATION','Run setupGap before connecting the tracker.');var last=sheet.getLastRow();if(last<2)return [];var columns=GAP_COLUMNS_[name];return sheet.getRange(2,1,last-1,columns.length).getValues().map(function(values,index){var row={_row:index+2};columns.forEach(function(key,i){row[key]=values[i];});return row;}).filter(function(row){return !!row[columns[0]];});}
-function values_(name,row){return GAP_COLUMNS_[name].map(function(key){var value=row[key];if(value==null)return '';if(typeof value==='string'&&/^[\s]*[=+@-]/.test(value))return "'"+value;return value;});}
+function values_(name,row){return GAP_COLUMNS_[name].map(function(key){var value=row[key];if(value==null)return '';if(key==='sapDetails'&&typeof value==='object')return JSON.stringify(value);if(typeof value==='string'&&/^[\s]*[=+@-]/.test(value))return "'"+value;return value;});}
 function append_(book,name,row){var sheet=book.getSheetByName(name),range=sheet.getRange(sheet.getLastRow()+1,1,1,GAP_COLUMNS_[name].length);range.setNumberFormat('@');range.setValues([values_(name,row)]);}
 function replace_(book,name,number,row){var range=book.getSheetByName(name).getRange(number,1,1,GAP_COLUMNS_[name].length);range.setNumberFormat('@');range.setValues([values_(name,row)]);}
 function audit_(book,actor,action,id,before,after,operationId){append_(book,'AuditLog',{id:'audit_'+Utilities.getUuid(),at:new Date().toISOString(),actor:actor.email,action:action,recordId:id,before:before?JSON.stringify(clean_(before)):'',after:after?JSON.stringify(clean_(after)):'',operationId:operationId});}

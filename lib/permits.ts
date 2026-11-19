@@ -1,6 +1,7 @@
 export type Shift = 'A' | 'B' | 'C' | 'G';
 export type Status = 'pending' | 'isolated' | 'issued' | 'extended' | 'returned';
 export type Role = 'admin' | 'issuer' | 'requester';
+import type { SapPermitDetails } from './sap-permit';
 export type Permit = {
   id: string; plant: string; unit: string; orderNo: string; orderType: string;
   jobDescription: string; receiver: string; contactNo: string; section: string;
@@ -8,6 +9,7 @@ export type Permit = {
   issueTime: string; extendedTime: string; returnedTime: string; status: Status;
   issuer: string; createdBy: string; updatedBy: string; createdAt: string;
   updatedAt: string; version: number; deletedAt?: string; operationId?: string;
+  sapDetails?: SapPermitDetails;
 };
 export type PermitInput = Omit<Permit, 'id' | 'plant' | 'orderType' | 'createdBy' | 'updatedBy' | 'createdAt' | 'updatedAt' | 'version'> & {id?: string; version?: number};
 export type PermitRequest = {id: string; targetPermitId?: string; requestType: 'new' | 'update'; payload: PermitInput; requestedBy: string; requestedName: string; requestedAt: string; decision: string; version: number};
@@ -15,12 +17,13 @@ export type Filters = {query: string; section: string; orderType: string; status
 export const EMPTY_FILTERS: Filters = {query:'',section:'',orderType:'',status:'',unit:''};
 export const SECTIONS = ['Mechanical', 'Electrical', 'Operation'];
 export const SHIFTS: Shift[] = ['A','B','C','G'];
-export const ORDER_TYPES = ['MA','M1','M2','M3','M4'];
+export const ORDER_TYPES = ['MA','M1','M2','M3','M4','SAP'];
 export const STATUS_LABELS: Record<Status,string> = {pending:'Pending',isolated:'Isolated',issued:'Issued',extended:'Extended',returned:'Returned'};
 
 export function classifyOrder(value: string): string {
   if (/^1\d{7}$/.test(value)) return 'MA';
   if (/^[1-4]\d{8}$/.test(value)) return `M${value[0]}`;
+  if (/^9\d{8,11}$/.test(value) || /^\d{10,12}$/.test(value)) return 'SAP';
   return '';
 }
 export function plantClock(now = new Date()): {date: string; shift: Shift; time: string} {
@@ -94,7 +97,7 @@ export function permitsCSV(rows: Permit[]): string {
 }
 export function validateInput(p: PermitInput): string[] {
   const errors:string[]=[];
-  if(!classifyOrder(p.orderNo))errors.push('Enter an 8-digit MA order beginning with 1, or a 9-digit M1–M4 order beginning with 1–4.');
+  if(!classifyOrder(p.orderNo))errors.push('Enter a valid MA, M1–M4 or SAP permit number.');
   if(!p.jobDescription.trim())errors.push('Enter the job description.');
   if(!p.receiver.trim())errors.push('Enter the receiver’s name.');
   if(!SECTIONS.includes(p.section))errors.push('Choose a section.');
