@@ -10,6 +10,7 @@ export type Permit = {
   issuer: string; createdBy: string; updatedBy: string; createdAt: string;
   updatedAt: string; version: number; deletedAt?: string; operationId?: string;
   sapDetails?: SapPermitDetails;
+  applicantDetails?: {employeeId:string;email:string};
 };
 export type PermitInput = Omit<Permit, 'id' | 'plant' | 'orderType' | 'createdBy' | 'updatedBy' | 'createdAt' | 'updatedAt' | 'version'> & {id?: string; version?: number};
 export type PermitRequest = {id: string; targetPermitId?: string; requestType: 'new' | 'update'; payload: PermitInput; requestedBy: string; requestedName: string; requestedAt: string; decision: string; version: number};
@@ -18,7 +19,7 @@ export const EMPTY_FILTERS: Filters = {query:'',section:'',orderType:'',status:'
 export const SECTIONS = ['Mechanical', 'Electrical', 'Operation'];
 export const SHIFTS: Shift[] = ['A','B','C','G'];
 export const ORDER_TYPES = ['MA','M1','M2','M3','M4','SAP'];
-export const STATUS_LABELS: Record<Status,string> = {pending:'Pending',isolated:'Isolated',issued:'Issued',extended:'Extended',returned:'Returned'};
+export const STATUS_LABELS: Record<Status,string> = {pending:'Waiting for issue',isolated:'Isolated',issued:'Issued',extended:'Extended',returned:'Returned'};
 
 export function classifyOrder(value: string): string {
   if (/^1\d{7}$/.test(value)) return 'MA';
@@ -61,7 +62,7 @@ export function latestByOrder(rows: Permit[]): Permit[] {
 }
 export function filterPermits(rows: Permit[], filters: Filters): Permit[] {
   const q=filters.query.toLowerCase().trim();
-  return rows.filter(p=>!p.deletedAt&&(!q||[p.orderNo,p.jobDescription,p.receiver,p.contactNo].some(v=>v.toLowerCase().includes(q)))&&(!filters.section||p.section===filters.section)&&(!filters.orderType||p.orderType===filters.orderType)&&(!filters.status||p.status===filters.status)&&(!filters.unit||p.unit===filters.unit));
+  return rows.filter(p=>!p.deletedAt&&(!q||[p.orderNo,p.jobDescription,p.receiver,p.contactNo,p.applicantDetails?.employeeId||'',p.applicantDetails?.email||''].some(v=>v.toLowerCase().includes(q)))&&(!filters.section||p.section===filters.section)&&(!filters.orderType||p.orderType===filters.orderType)&&(!filters.status||p.status===filters.status)&&(!filters.unit||p.unit===filters.unit));
 }
 export function handover(rows: Permit[],date: string,shift: string) {
   const prev=previousShift(date,shift);
@@ -88,12 +89,12 @@ export function permitStructure(p: Pick<Permit,'isOnline'|'isolationTime'|'issue
   if(p.issueTime) return 'Issued';
   return 'Awaiting issue';
 }
-export const CSV_HEADERS=['Order number','Type','Plant','Unit','Shift date','Shift','Section','Job description','Receiver','Contact number','Online permit','Isolation time','Issue time','Extended time','Returned time','Status','Issuer','Last updated'];
+export const CSV_HEADERS=['Order number','Type','Plant','Unit','Shift date','Shift','Section','Job description','Receiver','Contact number','Online permit','Isolation time','Issue time','Extended time','Returned time','Status','Issuer','Last updated','Employee ID / Gatepass','Email'];
 export function csvCell(value: unknown): string {
   let s=String(value??''); if(/^[\s]*[=+@-]/.test(s)) s=`'${s}`;return `"${s.replace(/"/g,'""')}"`;
 }
 export function permitsCSV(rows: Permit[]): string {
-  return '\uFEFF'+[CSV_HEADERS,...rows.map(p=>[p.orderNo,p.orderType,p.plant,p.unit,p.shiftDate,p.shift,p.section,p.jobDescription,p.receiver,p.contactNo,p.isOnline?'Yes':'No',p.isolationTime,p.issueTime,p.extendedTime,p.returnedTime,STATUS_LABELS[p.status],p.issuer,p.updatedAt])].map(r=>r.map(csvCell).join(',')).join('\r\n');
+  return '\uFEFF'+[CSV_HEADERS,...rows.map(p=>[p.orderNo,p.orderType,p.plant,p.unit,p.shiftDate,p.shift,p.section,p.jobDescription,p.receiver,p.contactNo,p.isOnline?'Yes':'No',p.isolationTime,p.issueTime,p.extendedTime,p.returnedTime,STATUS_LABELS[p.status],p.issuer,p.updatedAt,p.applicantDetails?.employeeId||'',p.applicantDetails?.email||''])].map(r=>r.map(csvCell).join(',')).join('\r\n');
 }
 export function validateInput(p: PermitInput): string[] {
   const errors:string[]=[];
@@ -104,6 +105,7 @@ export function validateInput(p: PermitInput): string[] {
   if(!p.unit.trim())errors.push('Choose a unit.');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(p.shiftDate)||Number.isNaN(Date.parse(p.shiftDate+'T12:00:00Z')))errors.push('Choose a valid shift date.');
   if(!SHIFTS.includes(p.shift))errors.push('Choose a shift.');
+  if(p.applicantDetails?.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.applicantDetails.email))errors.push('Enter a valid email or leave it blank.');
   if(p.contactNo&&!/^\+?\d{7,15}$/.test(p.contactNo))errors.push('Use 7–15 digits for the contact number, with an optional + prefix.');
   for(const t of [p.isolationTime,p.issueTime,p.extendedTime,p.returnedTime])if(t&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(t))errors.push('Enter times in 24-hour HH:MM format.');
   if(p.status==='returned'&&!p.returnedTime)errors.push('Enter the returned time.');

@@ -6,7 +6,7 @@ import {createHmac,createHash,randomUUID} from 'node:crypto';
 const source=fs.readFileSync(new URL('../public/setup/Code.gs',import.meta.url),'utf8');
 function service(){
  const tables={Permits:[],Requests:[],Devices:[],Members:[{email:'admin@example.invalid',name:'Admin',role:'admin'}],AuditLog:[]},properties={GAP_UNITS:'["GAP","GAP-2"]',GAP_API_SECRET:'sample-secret-never-used-in-production',GAP_SPREADSHEET_ID:'sample',GAP_OWNER_SETUP_KEY:'sample-owner-setup-key',GAP_OWNER_EMAIL:'admin@example.invalid',GAP_JOIN_CODE:'sample-plant-code'};
- const book={getUrl:()=> 'https://docs.google.com/spreadsheets/d/sample/edit'};
+ const book={getUrl:()=> 'https://docs.google.com/spreadsheets/d/sample/edit',getSheetByName:name=>({getRange:(_r,c)=>({getValue:()=>context.GAP_COLUMNS_[name][c-1]})})};
  const cache=new Map();
  const context={console,PropertiesService:{getScriptProperties:()=>({getProperty:key=>properties[key],setProperty:(key,value)=>{properties[key]=value;},deleteProperty:key=>{delete properties[key];}})},SpreadsheetApp:{openById:()=>book,flush(){}},Utilities:{getUuid:randomUUID,Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_algorithm,value)=>[...createHash('sha256').update(value).digest()],computeHmacSha256Signature:(payload,key)=>[...createHmac('sha256',key).update(payload).digest()]},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock(){}})},CacheService:{getScriptCache:()=>({get:key=>cache.get(key),put:(key,value)=>cache.set(key,value)})},ContentService:{MimeType:{JSON:'json'},createTextOutput:text=>({setMimeType:()=>JSON.parse(text)})}};
  vm.createContext(context);vm.runInContext(source,context);
@@ -31,3 +31,27 @@ test('invalid operation ID cannot cause a partial member-role write',()=>{const 
 test('the last administrator cannot be demoted',()=>{const s=service();assert.throws(()=>s.call('setMember',{email:s.actor.email,role:'requester',operationId:operation()}),/at least one/);});
 test('archiving retains the row and its audit history',()=>{const s=service(),saved=s.call('save',{permit:permit(),operationId:operation()}).permit;s.call('archive',{id:saved.id,version:saved.version,operationId:operation()});assert.equal(s.tables.Permits.length,1);assert.ok(s.tables.Permits[0].deletedAt);assert.equal(s.call('list',{from:'2026-11-18',to:'2026-11-18'}).permits.length,0);assert.equal(s.tables.AuditLog.at(-1).action,'archive');});
 test('invalid dates and missing returned times are rejected server-side',()=>{const s=service();assert.throws(()=>s.call('save',{permit:permit({shiftDate:'2026-02-30'}),operationId:operation()}),/calendar date/);assert.throws(()=>s.call('save',{permit:permit({status:'returned'}),operationId:operation()}),/returned time/);assert.equal(s.tables.Permits.length,0);});
+
+
+test('email is optional and requested issuer role still needs administrator approval',()=>{
+ const s=service();const result=s.context.doPost({postData:{contents:JSON.stringify(s.packet('requestDevice',{joinCode:'sample-plant-code',name:'Contractor',employeeId:'GP-1234',phone:'9876543210',requestedRole:'issuer'}))}});
+ assert.equal(result.ok,true);assert.equal(result.active,false);assert.equal(s.tables.Devices[0].role,'requester');assert.equal(s.tables.Devices[0].requestedRole,'issuer');assert.equal(s.tables.Devices[0].employeeId,'GP-1234');assert.equal(result.user.phone,'9876543210');
+});
+test('receivers without email cannot see each other’s requests',()=>{
+ const s=service();s.tables.Devices.push({id:'one',tokenHash:s.context.deviceHash_('a'.repeat(64)),email:'',name:'One',role:'requester',status:'active'},{id:'two',tokenHash:s.context.deviceHash_('b'.repeat(64)),email:'',name:'Two',role:'requester',status:'active'});
+ const post=(token,action,body)=>s.context.doPost({postData:{contents:JSON.stringify(s.packet(action,body,token.repeat(64)))}});
+ assert.equal(post('a','request',{permit:permit(),operationId:operation()}).ok,true);
+ assert.equal(post('b','list',{from:'2026-11-18',to:'2026-11-18'}).requests.length,0);
+ assert.equal(post('a','list',{from:'2026-11-18',to:'2026-11-18'}).requests.length,1);
+});
+test('applicant profile survives saving and invalid optional email is rejected',()=>{
+ const s=service();const saved=s.call('save',{permit:permit({applicantDetails:{employeeId:'GP-0007',email:''}}),operationId:operation()}).permit;
+ assert.equal(saved.applicantDetails.employeeId,'GP-0007');assert.throws(()=>s.call('save',{permit:permit({applicantDetails:{employeeId:'',email:'bad'}}),operationId:operation()}),/valid applicant email/);
+});
+
+test('column migration appends profile headers, preserves records, and refuses unknown headers',()=>{
+ const s=service(),headers=s.context.GAP_COLUMNS_.Permits.slice(0,26),row=['existing permit'];
+ const sheet={getName:()=> 'Permits',getLastColumn:()=>headers.length,getMaxColumns:()=>30,getRange:(_r,c,_h,w)=>({getValues:()=>[headers.slice(c-1,c-1+w)],setValues:values=>{headers.splice(c-1,values[0].length,...values[0]);return {setBackground:()=>({setFontColor:()=>({setFontWeight:()=>{}})})};}})};
+ s.context.extendColumns_(sheet,s.context.GAP_COLUMNS_.Permits);assert.equal(headers[26],'applicantDetails');assert.equal(row[0],'existing permit');
+ headers[0]='unrelated';assert.throws(()=>s.context.extendColumns_(sheet,s.context.GAP_COLUMNS_.Permits),/unexpected columns/);
+});
